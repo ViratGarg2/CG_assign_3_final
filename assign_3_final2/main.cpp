@@ -38,6 +38,8 @@ float lastY =  700.0f / 2.0;
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 
+bool mouseCameraControlEnabled = false;
+
 int theWindowWidth = 700, theWindowHeight = 700;
 int theWindowPositionX = 40, theWindowPositionY = 40;
 
@@ -567,18 +569,27 @@ int scanlineMinY = 0;
 int scanlineMaxY = 0;
 
 
+void resetCamera() {
+    cameraPos   = glm::vec3(0.0f, 2.0f, 3.0f);
+    cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
+    cameraUp    = glm::vec3(0.0f, 1.0f, 0.0f);
+    yaw   = -90.0f;
+    pitch =  0.0f;
+    firstMouse = true;
+}
+
 void processInput(GLFWwindow *window)
 {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
 
-    if (rayTracingMode) {
+    if (rayTracingMode && mouseCameraControlEnabled) {
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     } else {
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     }
 
-    if (!rayTracingMode) return;
+    if (!rayTracingMode || !mouseCameraControlEnabled) return;
 
     float cameraSpeed = 2.5f * deltaTime;
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
@@ -593,7 +604,7 @@ void processInput(GLFWwindow *window)
 
 void mouse_callback(GLFWwindow* window, double xpos, double ypos)
 {
-    if (!rayTracingMode) {
+    if (!rayTracingMode || !mouseCameraControlEnabled) {
         firstMouse = true; 
         return;
     }
@@ -627,6 +638,18 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos)
     front.y = sin(glm::radians(pitch));
     front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
     cameraFront = glm::normalize(front);
+}
+
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
+{
+    if (key == GLFW_KEY_SPACE && action == GLFW_PRESS && rayTracingMode)
+    {
+        mouseCameraControlEnabled = !mouseCameraControlEnabled;
+        if (!mouseCameraControlEnabled) {
+            resetCamera();
+        }
+        firstMouse = true; // Reset mouse on toggle to avoid jump
+    }
 }
 
 
@@ -1701,9 +1724,10 @@ void onInit(int argc, char *argv[]) {
     spheres.push_back(Sphere(glm::vec3(0.0f, 0.0f, -3.0f), 1.0f, glm::vec3(0.8f, 0.2f, 0.2f), 0.5f));
     spheres.push_back(Sphere(glm::vec3(0.0f, -101.0f, -3.0f), 100.0f, glm::vec3(0.8f, 0.8f, 0.0f), 0.3f));
     cubes.push_back(Cube(glm::vec3(-2.5f, -0.5f, -2.0f), glm::vec3(-1.5f, 0.5f, -1.0f),glm::vec3(0.2f, 0.8f, 0.2f), 0.7f));
-    model = readOffFile("1grm.off");
+    char modelFilename[] = "1grm.off";
+    model = readOffFile(modelFilename);
     if (!model) {
-        fprintf(stderr, "Failed to load isohedron.off\n");
+        fprintf(stderr, "Failed to load 1grm.off\n");
         exit(1);
     }
     prepareMeshData();
@@ -1893,9 +1917,29 @@ void InitImGui(GLFWwindow *window)
 void RenderImGui() {
     ImGui::Begin("Mesh Slicer Controls");
     
+    bool oldRayTracingMode = rayTracingMode;
     ImGui::Checkbox("Ray Tracing Mode", &rayTracingMode);
+
+    if (oldRayTracingMode != rayTracingMode) {
+        char isoFile[] = "isohedron.off";
+        char grmFile[] = "1grm.off";
+        char* modelFile = rayTracingMode ? isoFile : grmFile;
+        if (model) {
+            FreeOffModel(model);
+        }
+        model = readOffFile(modelFile);
+        if (!model) {
+            fprintf(stderr, "Failed to load %s\n", modelFile);
+            exit(1);
+        }
+        prepareMeshData();
+        CreateMeshBuffers();
+        rayTracingModel = model;
+    }
     
     if (rayTracingMode) {
+        ImGui::Text("Camera control: %s", mouseCameraControlEnabled ? "Mouse" : "Default");
+        ImGui::Text("Press SPACE to toggle camera control.");
         // Sphere controls
         if (ImGui::CollapsingHeader("Sphere Properties")) {
             static float sphereReflectivity = 0.5f;
@@ -2211,6 +2255,7 @@ int main(int argc, char *argv[])
     GLFWwindow *window = glfwCreateWindow(theWindowWidth, theWindowHeight, "OpenGL", NULL, NULL);
     glfwMakeContextCurrent(window);
     glfwSetCursorPosCallback(window, mouse_callback);
+    glfwSetKeyCallback(window, key_callback);
 
     // Check for window creation failure
     if (!window)

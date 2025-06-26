@@ -9,7 +9,7 @@
 #include <vector>
 #include <cmath>
 #include <math.h>
-#include <algorithm>  // Add this for std::remove_if and std::sort
+#include <algorithm>
 
 
 #include "imgui.h"
@@ -22,6 +22,21 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+
+// Camera
+glm::vec3 cameraPos   = glm::vec3(0.0f, 2.0f, 3.0f);
+glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
+glm::vec3 cameraUp    = glm::vec3(0.0f, 1.0f, 0.0f);
+
+bool firstMouse = true;
+float yaw   = -90.0f;
+float pitch =  0.0f;
+float lastX =  700.0f / 2.0;
+float lastY =  700.0f / 2.0;
+
+// Timing
+float deltaTime = 0.0f;
+float lastFrame = 0.0f;
 
 int theWindowWidth = 700, theWindowHeight = 700;
 int theWindowPositionX = 40, theWindowPositionY = 40;
@@ -172,7 +187,7 @@ struct Light {
 };
 
 // make it false to see other outputs->scanlineFill,Bresssenman and slicing
-bool rayTracingMode = true;
+bool rayTracingMode = false;
 OffModel* rayTracingModel = nullptr;
 std::vector<Sphere> spheres;
 std::vector<Plane> planes;
@@ -367,13 +382,14 @@ void renderRayTracedScene(Matrix4f worldMatrix,Matrix4f viewMatrix) {
     float focalLength = 1.0f;
 
     glm::vec3 cameraPos = glm::vec3(glm::inverse(viewMat)[3]);
-glm::vec3 cameraFront = -glm::vec3(viewMat[2]); // Forward direction
-glm::vec3 cameraUp = glm::vec3(viewMat[1]);     // Up direction
+    glm::vec3 cameraFront = -glm::vec3(viewMat[2]); // Forward direction
+    glm::vec3 cameraUp = glm::vec3(viewMat[1]);     // Up direction
+    glm::vec3 cameraRight = glm::vec3(viewMat[0]);  // Right direction
 
-glm::vec3 origin = cameraPos;
-    glm::vec3 horizontal(viewportWidth, 0.0f, 0.0f);
-    glm::vec3 vertical(0.0f, viewportHeight, 0.0f);
-    glm::vec3 lowerLeftCorner = origin - horizontal/2.0f - vertical/2.0f - glm::vec3(0.0f, 0.0f, focalLength);
+    glm::vec3 origin = cameraPos;
+    glm::vec3 horizontal = viewportWidth * cameraRight;
+    glm::vec3 vertical = viewportHeight * cameraUp;
+    glm::vec3 lowerLeftCorner = origin + (cameraFront * focalLength) - (horizontal / 2.0f) - (vertical / 2.0f);
 
     for (int j = 0; j < theWindowHeight; j++) {
         for (int i = 0; i < theWindowWidth; i++) {
@@ -498,13 +514,9 @@ GLuint normalVBO, colorVBO;
 GLuint gWorldLocation, gViewLocation, gProjectionLocation;
 GLuint ShaderProgram;
 
-const int ANIMATION_DELAY = 20; /* milliseconds between rendering */
+const int ANIMATION_DELAY = 20;
 const char *pVSFileName = "shaders/shader.vs";
 const char *pFSFileName = "shaders/shader.fs";
-
-float cameraPos[3] = {0.0f, 0.0f, 3.0f};
-float cameraFront[3] = {0.0f, 0.0f, -1.0f};
-float cameraUp[3] = {0.0f, 1.0f, 0.0f};
 
 OffModel* model = nullptr;
 std::vector<float> meshVertices;
@@ -555,12 +567,73 @@ int scanlineMinY = 0;
 int scanlineMaxY = 0;
 
 
+void processInput(GLFWwindow *window)
+{
+    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+        glfwSetWindowShouldClose(window, true);
+
+    if (rayTracingMode) {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    } else {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    }
+
+    if (!rayTracingMode) return;
+
+    float cameraSpeed = 2.5f * deltaTime;
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+        cameraPos += cameraSpeed * cameraFront;
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+        cameraPos -= cameraSpeed * cameraFront;
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+        cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+        cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
+}
+
+void mouse_callback(GLFWwindow* window, double xpos, double ypos)
+{
+    if (!rayTracingMode) {
+        firstMouse = true; 
+        return;
+    }
+
+    if (firstMouse)
+    {
+        lastX = xpos;
+        lastY = ypos;
+        firstMouse = false;
+    }
+
+    float xoffset = xpos - lastX;
+    float yoffset = lastY - ypos; 
+    lastX = xpos;
+    lastY = ypos;
+
+    float sensitivity = 0.1f;
+    xoffset *= sensitivity;
+    yoffset *= sensitivity;
+
+    yaw   += xoffset;
+    pitch += yoffset;
+
+    if(pitch > 89.0f)
+        pitch = 89.0f;
+    if(pitch < -89.0f)
+        pitch = -89.0f;
+
+    glm::vec3 front;
+    front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
+    front.y = sin(glm::radians(pitch));
+    front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
+    cameraFront = glm::normalize(front);
+}
+
+
 void createProjectionMatrix(Matrix4f& Projection) {
-    // Simple orthographic projection
     float aspectRatio = (float)theWindowWidth / (float)theWindowHeight;
     float scale = 1.0f / model->extent * 1.5f; // Scale based on model size
     
-    // Create orthographic projection matrix
     Projection.m[0][0] = scale / aspectRatio;
     Projection.m[0][1] = 0.0f;
     Projection.m[0][2] = 0.0f;
@@ -583,14 +656,11 @@ void createProjectionMatrix(Matrix4f& Projection) {
 }
 
 void createViewMatrix(Matrix4f& View) {
-    float lookX = cameraPos[0] + cameraFront[0];
-    float lookY = cameraPos[1] + cameraFront[1];
-    float lookZ = cameraPos[2] + cameraFront[2];
+    glm::vec3 lookTarget = cameraPos + cameraFront;
     
-  
-    Vector3f position = {cameraPos[0], cameraPos[1], cameraPos[2]};
-    Vector3f target = {lookX, lookY, lookZ};
-    Vector3f up = {cameraUp[0], cameraUp[1], cameraUp[2]};
+    Vector3f position = {cameraPos.x, cameraPos.y, cameraPos.z};
+    Vector3f target = {lookTarget.x, lookTarget.y, lookTarget.z};
+    Vector3f up = {cameraUp.x, cameraUp.y, cameraUp.y};
     
  
     Vector3f zaxis = {
@@ -1631,7 +1701,7 @@ void onInit(int argc, char *argv[]) {
     spheres.push_back(Sphere(glm::vec3(0.0f, 0.0f, -3.0f), 1.0f, glm::vec3(0.8f, 0.2f, 0.2f), 0.5f));
     spheres.push_back(Sphere(glm::vec3(0.0f, -101.0f, -3.0f), 100.0f, glm::vec3(0.8f, 0.8f, 0.0f), 0.3f));
     cubes.push_back(Cube(glm::vec3(-2.5f, -0.5f, -2.0f), glm::vec3(-1.5f, 0.5f, -1.0f),glm::vec3(0.2f, 0.8f, 0.2f), 0.7f));
-    model = readOffFile("isohedron.off");
+    model = readOffFile("1grm.off");
     if (!model) {
         fprintf(stderr, "Failed to load isohedron.off\n");
         exit(1);
@@ -1823,77 +1893,73 @@ void InitImGui(GLFWwindow *window)
 void RenderImGui() {
     ImGui::Begin("Mesh Slicer Controls");
     
-    // Add ray tracing mode toggle
-    if(rayTracingMode){
-    if (true) {
-        
-        if (rayTracingMode) {
-            // Sphere controls
-            if (ImGui::CollapsingHeader("Sphere Properties")) {
-                static float sphereReflectivity = 0.5f;
-                static float sphereRadius = 1.0f;
-                static float sphereColor[3] = {0.8f, 0.2f, 0.2f};
-                
-                ImGui::PushID("sphere_reflectivity");
-                if (ImGui::DragFloat("Reflectivity", &sphereReflectivity, 0.01f, 0.0f, 1.0f)) {
-                    if (!spheres.empty()) {
-                        spheres[0].reflectivity = sphereReflectivity;
-                    }
-                }
-                ImGui::PopID();
-                
-                ImGui::PushID("sphere_radius");
-                if (ImGui::DragFloat("Radius", &sphereRadius, 0.1f, 0.1f, 5.0f)) {
-                    if (!spheres.empty()) {
-                        spheres[0].radius = sphereRadius;
-                    }
-                }
-                ImGui::PopID();
-                
-                ImGui::PushID("sphere_color");
-                if (ImGui::ColorEdit3("Color", sphereColor)) {
-                    if (!spheres.empty()) {
-                        spheres[0].color = glm::vec3(sphereColor[0], sphereColor[1], sphereColor[2]);
-                    }
-                }
-                ImGui::PopID();
-            }
+    ImGui::Checkbox("Ray Tracing Mode", &rayTracingMode);
+    
+    if (rayTracingMode) {
+        // Sphere controls
+        if (ImGui::CollapsingHeader("Sphere Properties")) {
+            static float sphereReflectivity = 0.5f;
+            static float sphereRadius = 1.0f;
+            static float sphereColor[3] = {0.8f, 0.2f, 0.2f};
             
-            // Light controls
-            if (ImGui::CollapsingHeader("Light Properties")) {
-                static float lightDir[3] = {1.0f, -1.0f, -2.0f};
-                static float lightColor[3] = {1.0f, 1.0f, 1.0f};
-                static float lightIntensity = 1.0f;
-                
-                ImGui::PushID("light_direction");
-                if (ImGui::DragFloat3("Direction", lightDir, 0.1f)) {
-                    directionalLight.direction = glm::normalize(glm::vec3(lightDir[0], lightDir[1], lightDir[2]));
+            ImGui::PushID("sphere_reflectivity");
+            if (ImGui::DragFloat("Reflectivity", &sphereReflectivity, 0.01f, 0.0f, 1.0f)) {
+                if (!spheres.empty()) {
+                    spheres[0].reflectivity = sphereReflectivity;
                 }
-                ImGui::PopID();
-                
-                ImGui::PushID("light_color");
-                if (ImGui::ColorEdit3("Color", lightColor)) {
-                    directionalLight.color = glm::vec3(lightColor[0], lightColor[1], lightColor[2]);
-                }
-                ImGui::PopID();
-                
-                ImGui::PushID("light_intensity");
-                if (ImGui::DragFloat("Intensity", &lightIntensity, 0.1f, 0.0f, 5.0f)) {
-                    directionalLight.intensity = lightIntensity;
-                }
-                ImGui::PopID();
             }
+            ImGui::PopID();
             
-            // Background color control
-            static float bgColor[3] = {0.2f, 0.2f, 0.2f};
-            ImGui::PushID("background_color");
-            if (ImGui::ColorEdit3("Background Color", bgColor)) {
-                backgroundColor = glm::vec3(bgColor[0], bgColor[1], bgColor[2]);
+            ImGui::PushID("sphere_radius");
+            if (ImGui::DragFloat("Radius", &sphereRadius, 0.1f, 0.1f, 5.0f)) {
+                if (!spheres.empty()) {
+                    spheres[0].radius = sphereRadius;
+                }
+            }
+            ImGui::PopID();
+            
+            ImGui::PushID("sphere_color");
+            if (ImGui::ColorEdit3("Color", sphereColor)) {
+                if (!spheres.empty()) {
+                    spheres[0].color = glm::vec3(sphereColor[0], sphereColor[1], sphereColor[2]);
+                }
             }
             ImGui::PopID();
         }
+        
+        // Light controls
+        if (ImGui::CollapsingHeader("Light Properties")) {
+            static float lightDir[3] = {1.0f, -1.0f, -2.0f};
+            static float lightColor[3] = {1.0f, 1.0f, 1.0f};
+            static float lightIntensity = 1.0f;
+            
+            ImGui::PushID("light_direction");
+            if (ImGui::DragFloat3("Direction", lightDir, 0.1f)) {
+                directionalLight.direction = glm::normalize(glm::vec3(lightDir[0], lightDir[1], lightDir[2]));
+            }
+            ImGui::PopID();
+            
+            ImGui::PushID("light_color");
+            if (ImGui::ColorEdit3("Color", lightColor)) {
+                directionalLight.color = glm::vec3(lightColor[0], lightColor[1], lightColor[2]);
+            }
+            ImGui::PopID();
+            
+            ImGui::PushID("light_intensity");
+            if (ImGui::DragFloat("Intensity", &lightIntensity, 0.1f, 0.0f, 5.0f)) {
+                directionalLight.intensity = lightIntensity;
+            }
+            ImGui::PopID();
+        }
+        
+        // Background color control
+        static float bgColor[3] = {0.2f, 0.2f, 0.2f};
+        ImGui::PushID("background_color");
+        if (ImGui::ColorEdit3("Background Color", bgColor)) {
+            backgroundColor = glm::vec3(bgColor[0], bgColor[1], bgColor[2]);
+        }
+        ImGui::PopID();
     }
-}
     
     // Add mesh mode controls
     if (!rayTracingMode) {
@@ -2132,44 +2198,50 @@ void cleanup()
 
 int main(int argc, char *argv[])
 {
-	glfwInit();
+    glfwInit();
 
-	// Define version and compatibility settings
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
-	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-	glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
+    // Define version and compatibility settings
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+    glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
 
-	// Create OpenGL window and context
-	GLFWwindow *window = glfwCreateWindow(theWindowWidth, theWindowHeight, "OpenGL", NULL, NULL);
-	glfwMakeContextCurrent(window);
+    // Create OpenGL window and context
+    GLFWwindow *window = glfwCreateWindow(theWindowWidth, theWindowHeight, "OpenGL", NULL, NULL);
+    glfwMakeContextCurrent(window);
+    glfwSetCursorPosCallback(window, mouse_callback);
 
-	// Check for window creation failure
-	if (!window)
-	{
-		fprintf(stderr, "Failed to create GLFW window\n");
-		glfwTerminate();
-		return 0;
-	}
+    // Check for window creation failure
+    if (!window)
+    {
+        fprintf(stderr, "Failed to create GLFW window\n");
+        glfwTerminate();
+        return 0;
+    }
 
-	// Initialize GLEW
-	glewExperimental = GL_TRUE;
-	glewInit();
-	printf("GL version: %s\n", glGetString(GL_VERSION));
+    // Initialize GLEW
+    glewExperimental = GL_TRUE;
+    glewInit();
+    printf("GL version: %s\n", glGetString(GL_VERSION));
 
 
 	onInit(argc, argv);
-	InitImGui(window);
+    InitImGui(window);
 
-	while (!glfwWindowShouldClose(window))
-	{
-		glfwPollEvents();
+    while (!glfwWindowShouldClose(window))
+    {
+        float currentFrame = glfwGetTime();
+        deltaTime = currentFrame - lastFrame;
+        lastFrame = currentFrame;
 
-		// Start the Dear ImGui frame
-		ImGui_ImplOpenGL3_NewFrame();
-		ImGui_ImplGlfw_NewFrame();
-		ImGui::NewFrame();
+        processInput(window);
+        glfwPollEvents();
+
+        // Start the Dear ImGui frame
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
 
 		rotation += 0.01f; // Increment rotation for animation
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);

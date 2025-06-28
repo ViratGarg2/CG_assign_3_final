@@ -20,6 +20,7 @@
 #include "graphics_utils.h"
 #include "light.h"
 #include "scanline.h"
+#include "mesh.h"
 #include "OFFReader.h"
 #include "geometry/Ray.h"
 #include "geometry/Sphere.h"
@@ -575,483 +576,8 @@ void createViewMatrix(Matrix4f& View) {
     View.m[3][3] = 1.0f;
 }
 
-void createCapTriangles(const vector<glm::vec3>& points, const vector<glm::vec3>& normals,const glm::vec3& color,const glm::vec3& planeNormal,vector<float>& outVertices,vector<float>& outNormals,vector<float>& outColors,vector<unsigned int>& outIndices,bool isPositiveSide,float gap) {
-if (points.size() < 3) return;
-
-// Project points to 2D for triangulation
-// Find basis vectors for the cutting plane
-glm::vec3 u, v;
-if (std::abs(planeNormal.x) < std::abs(planeNormal.y) &&
-std::abs(planeNormal.x) < std::abs(planeNormal.z)) {
-// x is smallest
-u = glm::normalize(glm::cross(planeNormal, glm::vec3(1.0f, 0.0f, 0.0f)));
-} else if (std::abs(planeNormal.y) < std::abs(planeNormal.z)) {
-// y is smallest
-u = glm::normalize(glm::cross(planeNormal, glm::vec3(0.0f, 1.0f, 0.0f)));
-} else {
-// z is smallest
-u = glm::normalize(glm::cross(planeNormal, glm::vec3(0.0f, 0.0f, 1.0f)));
-}
-v = glm::normalize(glm::cross(planeNormal, u));
-
-std::vector<glm::vec2> points2D;
-for (const auto& p : points) {
-float uCoord = glm::dot(p, u);
-float vCoord = glm::dot(p, v);
-points2D.push_back(glm::vec2(uCoord, vCoord));
-}
-
-// Calculate centroid for sorting
-glm::vec2 centroid(0.0f);
-for (const auto& p : points2D) {
-centroid += p;
-}
-centroid /= points2D.size();
-
-// Sort points in clockwise/counterclockwise order
-std::vector<size_t> indices(points.size());
-for (size_t i = 0; i < indices.size(); i++) {
-indices[i] = i;
-}
-
-std::sort(indices.begin(), indices.end(), [&](size_t a, size_t b) {
-glm::vec2 vecA = points2D[a] - centroid;
-glm::vec2 vecB = points2D[b] - centroid;
-return std::atan2(vecA.y, vecA.x) > std::atan2(vecB.y, vecB.x);
-});
-
-
-unsigned int baseIndex = outVertices.size() / 3;
-
-for (size_t idx : indices) {
-outVertices.push_back(points[idx].x);
-outVertices.push_back(points[idx].y);
-outVertices.push_back(points[idx].z);
-
-outNormals.push_back(planeNormal.x);
-outNormals.push_back(planeNormal.y);
-outNormals.push_back(planeNormal.z);
-
-outColors.push_back(color.x);
-outColors.push_back(color.y);
-outColors.push_back(color.z);
-}
-
-// Create fan triangulation
-for (size_t i = 1; i < indices.size() - 1; i++) {
-if (isPositiveSide) {
-// Positive cap - clockwise winding
-outIndices.push_back(baseIndex);
-outIndices.push_back(baseIndex + i);
-outIndices.push_back(baseIndex + i + 1);
-} else {
-// Negative cap - counterclockwise winding
-outIndices.push_back(baseIndex);
-outIndices.push_back(baseIndex + i + 1);
-outIndices.push_back(baseIndex + i);
-}
-}
-}
-
-
-void sliceMesh(const Plane& plane) {
-    std::vector<float> newVertices;
-    std::vector<float> newNormals;
-    std::vector<float> newColors;
-    std::vector<unsigned int> newIndices;
-    
-    // Maps to store intersection points for creating cap triangles
-    std::vector<glm::vec3> posIntersectionPoints;
-    std::vector<glm::vec3> negIntersectionPoints;
-    std::vector<glm::vec3> posIntersectionNormals;
-    std::vector<glm::vec3> negIntersectionNormals;
-    
-    // Process each triangle
-    for (size_t i = 0; i < meshIndices.size(); i += 3) {
-        std::vector<glm::vec3> triangleVerts;
-        std::vector<glm::vec3> triangleNorms;
-        std::vector<glm::vec3> triangleColors;
-        std::vector<float> distances;
-        
-        // Get triangle vertices and compute distances to plane
-        for (int j = 0; j < 3; j++) {
-            unsigned int idx = meshIndices[i + j];
-            glm::vec3 vert(meshVertices[idx * 3], meshVertices[idx * 3 + 1], meshVertices[idx * 3 + 2]);
-            glm::vec3 norm(meshNormals[idx * 3], meshNormals[idx * 3 + 1], meshNormals[idx * 3 + 2]);
-            glm::vec3 color(meshColors[idx * 3], meshColors[idx * 3 + 1], meshColors[idx * 3 + 2]);
-            
-            triangleVerts.push_back(vert);
-            triangleNorms.push_back(norm);
-            triangleColors.push_back(color);
-            distances.push_back(plane.getSignedDistance(vert));
-        }
-        
-        // Count vertices on each side of the plane
-        int positiveSide = 0, negativeSide = 0;
-        for (float d : distances) {
-            if (d > 0) positiveSide++;
-            else if (d < 0) negativeSide++;
-        }
-        
-        // If all vertices are on one side, add triangle to appropriate segment
-        if (positiveSide == 3 || negativeSide == 3) {
-            unsigned int baseIndex = newVertices.size() / 3;
-            
-            for (int j = 0; j < 3; j++) {
-                glm::vec3 vert = triangleVerts[j];
-                
-                // Apply gap translation if needed
-                if (positiveSide == 3) { // Positive side
-                    vert += plane.normal * (plane.gap * 0.5f);
-                } else { // Negative side
-                    vert -= plane.normal * (plane.gap * 0.5f);
-                }
-                
-                newVertices.push_back(vert.x);
-                newVertices.push_back(vert.y);
-                newVertices.push_back(vert.z);
-                
-                newNormals.push_back(triangleNorms[j].x);
-                newNormals.push_back(triangleNorms[j].y);
-                newNormals.push_back(triangleNorms[j].z);
-                
-                newColors.push_back(triangleColors[j].x);
-                newColors.push_back(triangleColors[j].y);
-                newColors.push_back(triangleColors[j].z);
-            }
-            
-            // Keep original winding order
-            newIndices.push_back(baseIndex);
-            newIndices.push_back(baseIndex + 1);
-            newIndices.push_back(baseIndex + 2);
-            
-            continue;
-        }
-        
-        // Triangle intersects the plane - compute intersection points
-        std::vector<glm::vec3> intersections;
-        std::vector<glm::vec3> intersectionNorms;
-        std::vector<glm::vec3> intersectionColors;
-        
-        for (int j = 0; j < 3; j++) {
-            int k = (j + 1) % 3;
-            
-            // Skip if vertices are on the same side of the plane
-            if (distances[j] * distances[k] >= 0.0f && !(distances[j] == 0.0f || distances[k] == 0.0f)) {
-                continue;
-            }
-            
-            // Calculate intersection parameter
-            float t;
-            if (distances[j] == 0.0f) {
-                t = 0.0f;
-            } else if (distances[k] == 0.0f) {
-                t = 1.0f;
-            } else {
-                t = distances[j] / (distances[j] - distances[k]);
-            }
-            
-            // Calculate intersection point with better precision
-            glm::vec3 intersection = triangleVerts[j] + t * (triangleVerts[k] - triangleVerts[j]);
-            
-            // Properly interpolate normal and color
-            glm::vec3 normal = glm::normalize((1.0f - t) * triangleNorms[j] + t * triangleNorms[k]);
-            glm::vec3 color = (1.0f - t) * triangleColors[j] + t * triangleColors[k];
-            
-            intersections.push_back(intersection);
-            intersectionNorms.push_back(normal);
-            intersectionColors.push_back(color);
-            
-            // Store intersection points for cap triangles
-            if (positiveSide > 0 && negativeSide > 0) {  // Only add if triangle truly intersects
-                posIntersectionPoints.push_back(intersection + plane.normal * (plane.gap * 0.5f));
-                negIntersectionPoints.push_back(intersection - plane.normal * (plane.gap * 0.5f));
-                posIntersectionNormals.push_back(normal);
-                negIntersectionNormals.push_back(normal);
-            }
-        }
-        
-        // Handle specific intersection cases
-        if (intersections.size() == 2) {
-            // Sort vertices by their sign (positive or negative side)
-            std::vector<int> posIndices, negIndices;
-            
-            for (int j = 0; j < 3; j++) {
-                if (distances[j] > 0) {
-                    posIndices.push_back(j);
-                } else if (distances[j] < 0) {
-                    negIndices.push_back(j);
-                } else {
-                    // Handle vertices exactly on the plane
-                    // For simplicity, we'll put them on both sides
-                    posIndices.push_back(j);
-                    negIndices.push_back(j);
-                }
-            }
-            
-            // Create triangles for positive side
-            if (posIndices.size() > 0) {
-                // Create one or two triangles depending on how vertices are distributed
-                if (posIndices.size() == 1) {
-                    // Create one triangle with the positive vertex and the two intersection points
-                    unsigned int baseIndex = newVertices.size() / 3;
-                    
-                    // Add positive vertex
-                    glm::vec3 posVert = triangleVerts[posIndices[0]] + plane.normal * (plane.gap * 0.5f);
-                    newVertices.push_back(posVert.x);
-                    newVertices.push_back(posVert.y);
-                    newVertices.push_back(posVert.z);
-                    
-                    newNormals.push_back(triangleNorms[posIndices[0]].x);
-                    newNormals.push_back(triangleNorms[posIndices[0]].y);
-                    newNormals.push_back(triangleNorms[posIndices[0]].z);
-                    
-                    newColors.push_back(triangleColors[posIndices[0]].x);
-                    newColors.push_back(triangleColors[posIndices[0]].y);
-                    newColors.push_back(triangleColors[posIndices[0]].z);
-                    
-                    // Add intersection points
-                    for (size_t k = 0; k < 2; k++) {
-                        glm::vec3 intPoint = intersections[k] + plane.normal * (plane.gap * 0.5f);
-                        newVertices.push_back(intPoint.x);
-                        newVertices.push_back(intPoint.y);
-                        newVertices.push_back(intPoint.z);
-                        
-                        newNormals.push_back(intersectionNorms[k].x);
-                        newNormals.push_back(intersectionNorms[k].y);
-                        newNormals.push_back(intersectionNorms[k].z);
-                        
-                        newColors.push_back(intersectionColors[k].x);
-                        newColors.push_back(intersectionColors[k].y);
-                        newColors.push_back(intersectionColors[k].z);
-                    }
-                    
-                    // Add triangle with correct winding order
-                    newIndices.push_back(baseIndex);
-                    newIndices.push_back(baseIndex + 1);
-                    newIndices.push_back(baseIndex + 2);
-                } else if (posIndices.size() == 2) {
-                    // Create two triangles from the two positive vertices and two intersection points
-                    unsigned int baseIndex = newVertices.size() / 3;
-                    
-                    // Add positive vertices
-                    for (int idx : posIndices) {
-                        glm::vec3 posVert = triangleVerts[idx] + plane.normal * (plane.gap * 0.5f);
-                        newVertices.push_back(posVert.x);
-                        newVertices.push_back(posVert.y);
-                        newVertices.push_back(posVert.z);
-                        
-                        newNormals.push_back(triangleNorms[idx].x);
-                        newNormals.push_back(triangleNorms[idx].y);
-                        newNormals.push_back(triangleNorms[idx].z);
-                        
-                        newColors.push_back(triangleColors[idx].x);
-                        newColors.push_back(triangleColors[idx].y);
-                        newColors.push_back(triangleColors[idx].z);
-                    }
-                    
-                    // Add intersection points
-                    for (size_t k = 0; k < 2; k++) {
-                        glm::vec3 intPoint = intersections[k] + plane.normal * (plane.gap * 0.5f);
-                        newVertices.push_back(intPoint.x);
-                        newVertices.push_back(intPoint.y);
-                        newVertices.push_back(intPoint.z);
-                        
-                        newNormals.push_back(intersectionNorms[k].x);
-                        newNormals.push_back(intersectionNorms[k].y);
-                        newNormals.push_back(intersectionNorms[k].z);
-                        
-                        newColors.push_back(intersectionColors[k].x);
-                        newColors.push_back(intersectionColors[k].y);
-                        newColors.push_back(intersectionColors[k].z);
-                    }
-                    
-                    // Add triangles with correct winding order
-                    newIndices.push_back(baseIndex);     // First vertex
-                    newIndices.push_back(baseIndex + 1); // Second vertex
-                    newIndices.push_back(baseIndex + 2); // First intersection
-                    
-                    newIndices.push_back(baseIndex + 1); // Second vertex
-                    newIndices.push_back(baseIndex + 3); // Second intersection
-                    newIndices.push_back(baseIndex + 2); // First intersection
-                }
-            }
-            
-            // Create triangles for negative side - similar logic as positive side
-            if (negIndices.size() > 0) {
-                // Create one or two triangles depending on how vertices are distributed
-                if (negIndices.size() == 1) {
-                    // Create one triangle with the negative vertex and the two intersection points
-                    unsigned int baseIndex = newVertices.size() / 3;
-                    
-                    // Add negative vertex
-                    glm::vec3 negVert = triangleVerts[negIndices[0]] - plane.normal * (plane.gap * 0.5f);
-                    newVertices.push_back(negVert.x);
-                    newVertices.push_back(negVert.y);
-                    newVertices.push_back(negVert.z);
-                    
-                    newNormals.push_back(triangleNorms[negIndices[0]].x);
-                    newNormals.push_back(triangleNorms[negIndices[0]].y);
-                    newNormals.push_back(triangleNorms[negIndices[0]].z);
-                    
-                    newColors.push_back(triangleColors[negIndices[0]].x);
-                    newColors.push_back(triangleColors[negIndices[0]].y);
-                    newColors.push_back(triangleColors[negIndices[0]].z);
-                    
-                    for (int k = 1; k >= 0; k--) {
-                        glm::vec3 intPoint = intersections[k] - plane.normal * (plane.gap * 0.5f);
-                        newVertices.push_back(intPoint.x);
-                        newVertices.push_back(intPoint.y);
-                        newVertices.push_back(intPoint.z);
-                        
-                        newNormals.push_back(intersectionNorms[k].x);
-                        newNormals.push_back(intersectionNorms[k].y);
-                        newNormals.push_back(intersectionNorms[k].z);
-                        
-                        newColors.push_back(intersectionColors[k].x);
-                        newColors.push_back(intersectionColors[k].y);
-                        newColors.push_back(intersectionColors[k].z);
-                    }
-                    
-                    newIndices.push_back(baseIndex);
-                    newIndices.push_back(baseIndex + 1);
-                    newIndices.push_back(baseIndex + 2);
-                } else if (negIndices.size() == 2) {
-                    // Create two triangles from the two negative vertices and two intersection points
-                    unsigned int baseIndex = newVertices.size() / 3;
-                    
-                    // Add negative vertices
-                    for (int idx : negIndices) {
-                        glm::vec3 negVert = triangleVerts[idx] - plane.normal * (plane.gap * 0.5f);
-                        newVertices.push_back(negVert.x);
-                        newVertices.push_back(negVert.y);
-                        newVertices.push_back(negVert.z);
-                        
-                        newNormals.push_back(triangleNorms[idx].x);
-                        newNormals.push_back(triangleNorms[idx].y);
-                        newNormals.push_back(triangleNorms[idx].z);
-                        
-                        newColors.push_back(triangleColors[idx].x);
-                        newColors.push_back(triangleColors[idx].y);
-                        newColors.push_back(triangleColors[idx].z);
-                    }
-                    
-                    // Add intersection points - ensure correct winding order
-                    for (int k = 1; k >= 0; k--) {
-                        glm::vec3 intPoint = intersections[k] - plane.normal * (plane.gap * 0.5f);
-                        newVertices.push_back(intPoint.x);
-                        newVertices.push_back(intPoint.y);
-                        newVertices.push_back(intPoint.z);
-                        
-                        newNormals.push_back(intersectionNorms[k].x);
-                        newNormals.push_back(intersectionNorms[k].y);
-                        newNormals.push_back(intersectionNorms[k].z);
-                        
-                        newColors.push_back(intersectionColors[k].x);
-                        newColors.push_back(intersectionColors[k].y);
-                        newColors.push_back(intersectionColors[k].z);
-                    }
-                    
-                    // Add triangles with correct winding order
-                    newIndices.push_back(baseIndex);
-                    newIndices.push_back(baseIndex + 1);
-                    newIndices.push_back(baseIndex + 2);
-                    
-                    newIndices.push_back(baseIndex + 1);
-                    newIndices.push_back(baseIndex + 3);
-                    newIndices.push_back(baseIndex + 2);
-                }
-            }
-        }
-    }
-    
-    if (posIntersectionPoints.size() >= 3) {
-        createCapTriangles(posIntersectionPoints, posIntersectionNormals, plane.color, 
-                          plane.normal, newVertices, newNormals, newColors, newIndices, true, plane.gap);
-    }
-    
-    if (negIntersectionPoints.size() >= 3) {
-        createCapTriangles(negIntersectionPoints, negIntersectionNormals, plane.color, 
-                          -plane.normal, newVertices, newNormals, newColors, newIndices, false, plane.gap);
-    }
-    
-    meshVertices = newVertices;
-    meshNormals = newNormals;
-    meshColors = newColors;
-    meshIndices = newIndices;
-}
-
 void drawLine2DBresenham(float x1, float y1, float x2, float y2) {
     drawLine2DBresenham(x1, y1, x2, y2, lineVertices, lineIndices, lineVAO, lineVBO, lineIBO);
-}
-
-void prepareMeshData() {
-meshVertices.clear();
-meshNormals.clear();
-meshColors.clear();
-meshIndices.clear();
-
-for (int i = 0; i < model->numberOfVertices; i++) {
-meshVertices.push_back(model->vertices[i].x);
-meshVertices.push_back(model->vertices[i].y);
-meshVertices.push_back(model->vertices[i].z);
-
-meshNormals.push_back(model->vertices[i].normal.x);
-meshNormals.push_back(model->vertices[i].normal.y);
-meshNormals.push_back(model->vertices[i].normal.z);
-
-float r = 1.0f;
-float g = 0.0f;
-float b = 0.0f;
-
-meshColors.push_back(r);
-meshColors.push_back(g);
-meshColors.push_back(b);
-}
-
-for (int i = 0; i < model->numberOfPolygons; i++) {
-if (model->polygons[i].noSides >= 3) {
-for (int j = 1; j < model->polygons[i].noSides - 1; j++) {
-meshIndices.push_back(model->polygons[i].v[0]);
-meshIndices.push_back(model->polygons[i].v[j]);
-meshIndices.push_back(model->polygons[i].v[j + 1]);
-}
-}
-}
-
-originalVertices = meshVertices;
-}
-
-void CreateMeshBuffers() {
-glGenVertexArrays(1, &VAO);
-glBindVertexArray(VAO);
-
-glGenBuffers(1, &VBO);
-glBindBuffer(GL_ARRAY_BUFFER, VBO);
-glBufferData(GL_ARRAY_BUFFER, meshVertices.size() * sizeof(float), meshVertices.data(), GL_STATIC_DRAW);
-
-glEnableVertexAttribArray(0);
-glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
-
-glGenBuffers(1, &normalVBO);
-glBindBuffer(GL_ARRAY_BUFFER, normalVBO);
-glBufferData(GL_ARRAY_BUFFER, meshNormals.size() * sizeof(float), meshNormals.data(), GL_STATIC_DRAW);
-
-glEnableVertexAttribArray(1);
-glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, 0);
-
-glGenBuffers(1, &colorVBO);
-glBindBuffer(GL_ARRAY_BUFFER, colorVBO);
-glBufferData(GL_ARRAY_BUFFER, meshColors.size() * sizeof(float), meshColors.data(), GL_STATIC_DRAW);
-
-glEnableVertexAttribArray(2);
-glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 0, 0);
-
-glGenBuffers(1, &IBO);
-glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, IBO);
-glBufferData(GL_ELEMENT_ARRAY_BUFFER, meshIndices.size() * sizeof(unsigned int), meshIndices.data(), GL_STATIC_DRAW);
-
-glBindVertexArray(0);
 }
 
 void computeFPS()
@@ -1189,8 +715,8 @@ void onInit(int argc, char *argv[]) {
         fprintf(stderr, "Failed to load models/1grm.off\n");
         exit(1);
     }
-    prepareMeshData();
-    CreateMeshBuffers();
+    prepareMeshData(model, meshVertices, meshNormals, meshColors, meshIndices, originalVertices);
+    CreateMeshBuffers(VAO, VBO, normalVBO, colorVBO, IBO, meshVertices, meshNormals, meshColors, meshIndices);
 
     rayTracingModel = model;
 
@@ -1396,8 +922,8 @@ void RenderImGui() {
             fprintf(stderr, "Failed to load %s\n", modelFile);
             exit(1);
         }
-        prepareMeshData();
-        CreateMeshBuffers();
+        prepareMeshData(model, meshVertices, meshNormals, meshColors, meshIndices, originalVertices);
+        CreateMeshBuffers(VAO, VBO, normalVBO, colorVBO, IBO, meshVertices, meshNormals, meshColors, meshIndices);
         rayTracingModel = model;
     }
     
@@ -1512,7 +1038,7 @@ void RenderImGui() {
                     std::vector<unsigned int> origIndices = meshIndices;
                     
                     // Apply slicing
-                    sliceMesh(slicingPlanes[i]);
+                    sliceMesh(slicingPlanes[i], meshVertices, meshNormals, meshColors, meshIndices);
                     
                     // Update buffers
                     glBindBuffer(GL_ARRAY_BUFFER, VBO);
@@ -1536,11 +1062,10 @@ void RenderImGui() {
             if (ImGui::Button("Reset Mesh"))
             {
                 // Reset mesh to original state
-                prepareMeshData();
-                CreateMeshBuffers();
+                prepareMeshData(model, meshVertices, meshNormals, meshColors, meshIndices, originalVertices);
+                CreateMeshBuffers(VAO, VBO, normalVBO, colorVBO, IBO, meshVertices, meshNormals, meshColors, meshIndices);
             }
         }
-    
     
     if (ImGui::CollapsingHeader("2D Bresenham Line Drawing"))
     {
@@ -1619,13 +1144,13 @@ void RenderImGui() {
             meshColors.clear();
             meshIndices.clear();
             customVertices.clear();
-            CreateMeshBuffers(); // Update the buffers
+            CreateMeshBuffers(VAO, VBO, normalVBO, colorVBO, IBO, meshVertices, meshNormals, meshColors, meshIndices); // Update the buffers
         }
         
         if (ImGui::Button("Return to Mesh Mode")) {
             customPolygonMode = false;
-            prepareMeshData();
-            CreateMeshBuffers();
+            prepareMeshData(model, meshVertices, meshNormals, meshColors, meshIndices, originalVertices);
+            CreateMeshBuffers(VAO, VBO, normalVBO, colorVBO, IBO, meshVertices, meshNormals, meshColors, meshIndices);
         }
         if (customPolygonMode) {
             static float newX = 0.0f, newY = 0.0f, newZ = 0.0f;
@@ -1663,9 +1188,9 @@ void RenderImGui() {
                 }
                 
                 initializeEdgeTable(customVertices, edgeTable, scanlineMinY, scanlineMaxY);
-                scanlineFill(edgeTable, activeEdgeTable, scanlineMinY, scanlineMaxY, meshVertices, meshNormals, meshColors, meshIndices, CreateMeshBuffers);
+                scanlineFill(edgeTable, activeEdgeTable, scanlineMinY, scanlineMaxY, meshVertices, meshNormals, meshColors, meshIndices, [&](){ CreateMeshBuffers(VAO, VBO, normalVBO, colorVBO, IBO, meshVertices, meshNormals, meshColors, meshIndices); });
                 
-                CreateMeshBuffers();
+                CreateMeshBuffers(VAO, VBO, normalVBO, colorVBO, IBO, meshVertices, meshNormals, meshColors, meshIndices);
             }
         }
         }

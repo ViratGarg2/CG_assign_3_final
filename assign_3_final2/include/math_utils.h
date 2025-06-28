@@ -1,3 +1,6 @@
+#ifndef MATH_UTILS_H
+#define MATH_UTILS_H
+
 /*
 
 	Copyright 2014 Etay Meiri
@@ -24,7 +27,7 @@
 #define ToRadian(x) (float)(((x) * M_PI / 180.0f))
 #define ToDegree(x) (float)(((x) * 180.0f / M_PI))
 
-float RandomFloat() {
+inline float RandomFloat() {
 	float Max = RAND_MAX;
 	return ((float) random() / Max);
 }
@@ -515,3 +518,5 @@ public:
 		m[3][3] = 0.0;
 	}
 };
+
+#endif

@@ -1,6 +1,10 @@
+#ifndef OFF_READER_H
+#define OFF_READER_H
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "math_utils.h"
 
 
 typedef struct Vt {
@@ -23,7 +27,7 @@ typedef struct offmodel {
 	float extent;
 }OffModel;
 
-OffModel* readOffFile(char * OffFile) {
+inline OffModel* readOffFile(char * OffFile) {
 	FILE * input;
 	char type[3]; 
 	int noEdges;
@@ -100,7 +104,7 @@ OffModel* readOffFile(char * OffFile) {
 	fclose(input);
 	return model;
 }
-int FreeOffModel(OffModel *model)
+inline int FreeOffModel(OffModel *model)
 {
 	int i,j;
 	if( model == NULL )
@@ -117,4 +121,6 @@ int FreeOffModel(OffModel *model)
 	free(model);
 	return 1;
 }
+
+#endif // OFF_READER_H
 

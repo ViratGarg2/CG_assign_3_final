@@ -1,6 +1,7 @@
 #include "scanline.h"
 #include <algorithm>
 #include <climits>
+#include <functional>
 
 void initializeEdgeTable(
     const std::vector<Point3D>& customVertices,
@@ -93,7 +94,7 @@ void scanlineFill(
     std::vector<float>& meshNormals,
     std::vector<float>& meshColors,
     std::vector<unsigned int>& meshIndices,
-    void (*updateBuffers)()
+    const std::function<void()>& updateBuffers
 ) {
     if (edgeTable.empty()) return;
     

@@ -4,6 +4,7 @@
 #include <vector>
 #include <glm/glm.hpp>
 #include "geometry/Point3D.h"
+#include <functional>
 
 struct Edge {
     float yMax;
@@ -36,7 +37,7 @@ void scanlineFill(
     std::vector<float>& meshNormals,
     std::vector<float>& meshColors,
     std::vector<unsigned int>& meshIndices,
-    void (*updateBuffers)()
+    const std::function<void()>& updateBuffers
 );
 
 #endif // SCANLINE_H

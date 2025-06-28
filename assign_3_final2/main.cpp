@@ -2237,14 +2237,12 @@ void cleanup()
     }
 }
 
-// Add a helper function for ray-triangle intersection
 
 
 int main(int argc, char *argv[])
 {
     glfwInit();
 
-    // Define version and compatibility settings
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
@@ -2257,7 +2255,6 @@ int main(int argc, char *argv[])
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetKeyCallback(window, key_callback);
 
-    // Check for window creation failure
     if (!window)
     {
         fprintf(stderr, "Failed to create GLFW window\n");
@@ -2294,7 +2291,6 @@ int main(int argc, char *argv[])
 		onDisplay();
 		RenderImGui();
 
-		// Render ImGui
 		ImGui::Render();
 		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
@@ -2302,7 +2298,6 @@ int main(int argc, char *argv[])
 		glfwSwapBuffers(window);
 	}
 
-	// Cleanup
 	ImGui_ImplOpenGL3_Shutdown();
 	ImGui_ImplGlfw_Shutdown();
 	ImGui::DestroyContext();

@@ -23,7 +23,6 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
-// Camera
 glm::vec3 cameraPos   = glm::vec3(0.0f, 2.0f, 3.0f);
 glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
 glm::vec3 cameraUp    = glm::vec3(0.0f, 1.0f, 0.0f);
@@ -34,7 +33,6 @@ float pitch =  0.0f;
 float lastX =  700.0f / 2.0;
 float lastY =  700.0f / 2.0;
 
-// Timing
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 
@@ -43,7 +41,6 @@ bool mouseCameraControlEnabled = false;
 int theWindowWidth = 700, theWindowHeight = 700;
 int theWindowPositionX = 40, theWindowPositionY = 40;
 
-// Ray tracing structures and functions
 struct Ray {
     glm::vec3 origin;
     glm::vec3 direction;
@@ -55,11 +52,11 @@ struct Sphere {
     glm::vec3 center;
     float radius;
     glm::vec3 color;
-    float reflectivity;  // 0 to 1, where 1 is fully reflective
+    float reflectivity;
     
     Sphere(const glm::vec3& c, float r, const glm::vec3& col, float refl = 0.0f) 
         : center(c), radius(r), color(col), reflectivity(refl) {}
-    
+    // using (ray.origin+ray.direction*t-sphere.origin)^2 = radius^2 and find t
     bool intersect(const Ray& ray, float& t) const {
         glm::vec3 oc = ray.origin - center;
         float a = glm::dot(ray.direction, ray.direction);
@@ -68,7 +65,7 @@ struct Sphere {
         float discriminant = b * b - 4 * a * c;
         
         if (discriminant < 0) return false;
-        
+
         float sqrtd = sqrt(discriminant);
         float root = (-b - sqrtd) / (2.0f * a);
         
@@ -94,7 +91,7 @@ struct Cube {
     
     Cube(const glm::vec3& min, const glm::vec3& max, const glm::vec3& col, float refl = 0.0f)
         : min(min), max(max), color(col), reflectivity(refl) {}
-    
+    // https://en.wikipedia.org/wiki/Slab_method using slab method for checking intersetction with cube
     bool intersect(const Ray& ray, float& t) const {
         float tMin = -std::numeric_limits<float>::infinity();
         float tMax = std::numeric_limits<float>::infinity();
@@ -144,24 +141,22 @@ struct Cube {
     }
 };
 
-std::vector<Cube> cubes;
+vector<Cube> cubes;
 
 struct Plane {
     glm::vec3 normal;
     float distance;
-    float gap;  // For mesh slicing
+    float gap;
     glm::vec3 color;
-    float reflectivity;  // For ray tracing
+    float reflectivity;
     
     Plane(const glm::vec3& n, float d, float g = 0.0f, const glm::vec3& c = glm::vec3(1.0f), float refl = 0.0f)
         : normal(glm::normalize(n)), distance(d), gap(g), color(c), reflectivity(refl) {}
     
-    // For mesh slicing
     float getSignedDistance(const glm::vec3& point) const {
         return glm::dot(normal, point) - distance;
     }
     
-    // For ray tracing
     bool intersect(const Ray& ray, float& t) const {
         float denom = glm::dot(normal, ray.direction);
         if (abs(denom) < 1e-6) return false;
@@ -173,10 +168,10 @@ struct Plane {
 
 
 std::vector<Plane> slicingPlanes = {
-    Plane(glm::vec3(1.0f, 0.0f, 0.0f), 0.0f, 0.0f, glm::vec3(1.0f, 0.0f, 0.0f)),  // Red plane
-    Plane(glm::vec3(0.0f, 1.0f, 0.0f), 0.0f, 0.0f, glm::vec3(0.0f, 1.0f, 0.0f)),  // Green plane
-    Plane(glm::vec3(0.0f, 0.0f, 1.0f), 0.0f, 0.0f, glm::vec3(0.0f, 0.0f, 1.0f)),  // Blue plane
-    Plane(glm::vec3(1.0f, 1.0f, 1.0f), 0.5f, 0.0f, glm::vec3(1.0f, 1.0f, 0.0f))   // Yellow plane
+    Plane(glm::vec3(1.0f, 0.0f, 0.0f), 0.0f, 0.0f, glm::vec3(1.0f, 0.0f, 0.0f)),
+    Plane(glm::vec3(0.0f, 1.0f, 0.0f), 0.0f, 0.0f, glm::vec3(0.0f, 1.0f, 0.0f)),
+    Plane(glm::vec3(0.0f, 0.0f, 1.0f), 0.0f, 0.0f, glm::vec3(0.0f, 0.0f, 1.0f)),
+    Plane(glm::vec3(1.0f, 1.0f, 1.0f), 0.5f, 0.0f, glm::vec3(1.0f, 1.0f, 0.0f))
 };
 
 struct Light {
@@ -188,7 +183,6 @@ struct Light {
         : direction(glm::normalize(dir)), color(col), intensity(i) {}
 };
 
-// make it false to see other outputs->scanlineFill,Bresssenman and slicing
 bool rayTracingMode = false;
 OffModel* rayTracingModel = nullptr;
 std::vector<Sphere> spheres;
@@ -206,7 +200,7 @@ bool rayTriangleIntersect(const Ray& ray, const glm::vec3& v0, const glm::vec3& 
     glm::vec3 edge2 = v2 - v0;
     glm::vec3 h = glm::cross(ray.direction, edge2);
     float a = glm::dot(edge1, h);
-    if (fabs(a) < EPSILON) return false;  // Ray is parallel to the triangle
+    if (fabs(a) < EPSILON) return false;
 
     float f = 1.0f / a;
     glm::vec3 s = ray.origin - v0;
@@ -1811,7 +1805,7 @@ static void onDisplay() {
         World.InitIdentity();
         
         // Apply scaling for custom polygon mode
-        float scaleValue = 0.5f; // Adjust scale as needed
+        float scaleValue = 2.0f; // Adjust scale as needed
         World.m[0][0] = scaleValue;
         World.m[1][1] = scaleValue;
         World.m[2][2] = scaleValue;
@@ -1885,7 +1879,7 @@ static void onDisplay() {
         LineWorld.InitIdentity(); // Reset to identity matrix
         
         // Apply scaling if needed
-        float lineScale = 0.5f;
+        float lineScale = 2.0f;
         LineWorld.m[0][0] = lineScale;
         LineWorld.m[1][1] = lineScale;
         LineWorld.m[2][2] = lineScale;

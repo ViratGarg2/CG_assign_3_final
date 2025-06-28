@@ -13,6 +13,9 @@ struct Sphere {
     Sphere(const glm::vec3& c, float r, const glm::vec3& col, float refl = 0.0f) 
         : center(c), radius(r), color(col), reflectivity(refl) {}
 
+    // Use the ray-sphere intersection formula
+    // https://en.wikipedia.org/wiki/Line%E2%80%93sphere_intersection
+    // (ray.origin + t * ray.direction - center) . (ray.origin + t * ray.direction - center) = radius^2
     bool intersect(const Ray& ray, float& t) const {
         glm::vec3 oc = ray.origin - center;
         float a = glm::dot(ray.direction, ray.direction);

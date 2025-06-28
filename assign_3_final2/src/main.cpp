@@ -17,11 +17,15 @@
 #include "backends/imgui_impl_opengl3.h"
 #include "file_utils.h"
 #include "math_utils.h"
+#include "graphics_utils.h"
+#include "light.h"
+#include "scanline.h"
 #include "OFFReader.h"
 #include "geometry/Ray.h"
 #include "geometry/Sphere.h"
 #include "geometry/Cube.h"
 #include "geometry/Plane.h"
+#include "geometry/Point3D.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -52,15 +56,6 @@ std::vector<Plane> slicingPlanes = {
     Plane(glm::vec3(0.0f, 1.0f, 0.0f), 0.0f, 0.0f, glm::vec3(0.0f, 1.0f, 0.0f)),
     Plane(glm::vec3(0.0f, 0.0f, 1.0f), 0.0f, 0.0f, glm::vec3(0.0f, 0.0f, 1.0f)),
     Plane(glm::vec3(1.0f, 1.0f, 1.0f), 0.5f, 0.0f, glm::vec3(1.0f, 1.0f, 0.0f))
-};
-
-struct Light {
-    glm::vec3 direction;
-    glm::vec3 color;
-    float intensity;
-    
-    Light(const glm::vec3& dir, const glm::vec3& col, float i = 1.0f)
-        : direction(glm::normalize(dir)), color(col), intensity(i) {}
 };
 
 bool rayTracingMode = false;
@@ -302,7 +297,6 @@ void renderRayTracedScene(Matrix4f worldMatrix,Matrix4f viewMatrix) {
     static GLuint quadVBO = 0;
     if (quadVAO == 0) {
         float quadVertices[] = {
-            // positions        // texture coords
             -1.0f,  1.0f, 0.0f, 0.0f, 1.0f,
             -1.0f, -1.0f, 0.0f, 0.0f, 0.0f,
              1.0f,  1.0f, 0.0f, 1.0f, 1.0f,
@@ -376,8 +370,6 @@ void renderRayTracedScene(Matrix4f worldMatrix,Matrix4f viewMatrix) {
 
 #define GL_SILENCE_DEPRECATION
 
-/********************************************************************/
-/*   Variables */
 
 char theProgramTitle[] = "Sample";
 
@@ -386,7 +378,6 @@ bool isAnimating = true;
 float rotation = 0.0f;
 GLuint VBO, VAO, IBO;
 GLuint normalVBO, colorVBO;
-// GLuint gWorldLocation;
 GLuint gWorldLocation, gViewLocation, gProjectionLocation;
 GLuint ShaderProgram;
 
@@ -406,36 +397,12 @@ std::vector<float> originalVertices;
 bool showScanlineFill = false;
 bool customPolygonMode = false;
 
-struct Point3D {
-    float x;
-    float y;
-    float z;
-    
-    Point3D(float _x, float _y, float _z) : x(_x), y(_y), z(_z) {}
-};
-
 std::vector<Point3D> customVertices;
 
-// Vertices for rendering the line
 std::vector<float> lineVertices;
 std::vector<unsigned int> lineIndices;
 GLuint lineVAO = 0, lineVBO = 0, lineIBO = 0;
 bool showLine = false;
-
-struct Edge {
-    float yMax;        // Maximum y-coordinate
-    float xMin;        // x-coordinate at yMin
-    float slope;       // 1/m (inverse slope)
-    float yMin;        // Minimum y-coordinate
-    glm::vec3 color;   // Color at this edge
-};
-
-struct ActiveEdge {
-    float x;           // Current x-coordinate
-    float yMax;        // Maximum y-coordinate
-    float slope;       // 1/m (inverse slope)
-    glm::vec3 color;   // Color at this edge
-};
 
 std::vector<std::vector<Edge>> edgeTable;
 std::vector<ActiveEdge> activeEdgeTable;
@@ -522,7 +489,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         if (!mouseCameraControlEnabled) {
             resetCamera();
         }
-        firstMouse = true; // Reset mouse on toggle to avoid jump
+        firstMouse = true;
     }
 }
 
@@ -608,17 +575,7 @@ void createViewMatrix(Matrix4f& View) {
     View.m[3][3] = 1.0f;
 }
 
-void createCapTriangles(const std::vector<glm::vec3>& points, 
-    const std::vector<glm::vec3>& normals,
-    const glm::vec3& color,
-    const glm::vec3& planeNormal,
-    std::vector<float>& outVertices,
-    std::vector<float>& outNormals,
-    std::vector<float>& outColors,
-    std::vector<unsigned int>& outIndices,
-    bool isPositiveSide,
-    float gap) {
-// Check if we have enough points
+void createCapTriangles(const vector<glm::vec3>& points, const vector<glm::vec3>& normals,const glm::vec3& color,const glm::vec3& planeNormal,vector<float>& outVertices,vector<float>& outNormals,vector<float>& outColors,vector<unsigned int>& outIndices,bool isPositiveSide,float gap) {
 if (points.size() < 3) return;
 
 // Project points to 2D for triangulation
@@ -663,11 +620,9 @@ glm::vec2 vecB = points2D[b] - centroid;
 return std::atan2(vecA.y, vecA.x) > std::atan2(vecB.y, vecB.x);
 });
 
-// Create triangles using a simple fan triangulation
-// This works well for convex polygons
+
 unsigned int baseIndex = outVertices.size() / 3;
 
-// Add all vertices
 for (size_t idx : indices) {
 outVertices.push_back(points[idx].x);
 outVertices.push_back(points[idx].y);
@@ -1027,160 +982,8 @@ void sliceMesh(const Plane& plane) {
 }
 
 void drawLine2DBresenham(float x1, float y1, float x2, float y2) {
-    // Clear any previous line data
-    lineVertices.clear();
-    lineIndices.clear();
-    
-    // Use higher scale for better precision
-    const int scale = 100;
-    int ix1 = static_cast<int>(x1 * scale);
-    int iy1 = static_cast<int>(y1 * scale);
-    int ix2 = static_cast<int>(x2 * scale);
-    int iy2 = static_cast<int>(y2 * scale);
-    
-    // Determine if the line is steep (|y2-y1| > |x2-x1|)
-    bool steep = abs(iy2 - iy1) > abs(ix2 - ix1);
-    
-    // If line is steep, swap x and y coordinates
-    if (steep) {
-        std::swap(ix1, iy1);
-        std::swap(ix2, iy2);
-    }
-    
-    // If line goes from right to left, swap endpoints
-    if (ix1 > ix2) {
-        std::swap(ix1, ix2);
-        std::swap(iy1, iy2);
-    }
-    
-    int dx = ix2 - ix1;
-    int dy = abs(iy2 - iy1);
-    int error = dx / 2;
-    
-    int y = iy1;
-    int ystep = (iy1 < iy2) ? 1 : -1;
-    
-    // Add points to the line
-    for (int x = ix1; x <= ix2; x++) {
-        float vertX, vertY;
-        
-        if (steep) {
-            vertX = static_cast<float>(y) / scale;
-            vertY = static_cast<float>(x) / scale;
-        } else {
-            vertX = static_cast<float>(x) / scale;
-            vertY = static_cast<float>(y) / scale;
-        }
-        
-        // Add vertex coordinates
-        lineVertices.push_back(vertX);
-        lineVertices.push_back(vertY);
-        lineVertices.push_back(0.0f);
-        
-        // Add color (red)
-        lineVertices.push_back(1.0f);
-        lineVertices.push_back(0.0f);
-        lineVertices.push_back(0.0f);
-        
-        // Add normal
-        lineVertices.push_back(0.0f);
-        lineVertices.push_back(0.0f);
-        lineVertices.push_back(1.0f);
-        
-        // Add index
-        lineIndices.push_back(lineIndices.size());
-        
-        error -= dy;
-        if (error < 0) {
-            y += ystep;
-            error += dx;
-        }
-    }
-    
-    // Delete previous OpenGL buffers if they exist
-    if (lineVAO != 0) {
-        glDeleteVertexArrays(1, &lineVAO);
-    }
-    if (lineVBO != 0) {
-        glDeleteBuffers(1, &lineVBO);
-    }
-    if (lineIBO != 0) {
-        glDeleteBuffers(1, &lineIBO);
-    }
-    
-    // Create new buffers
-    glGenVertexArrays(1, &lineVAO);
-    glBindVertexArray(lineVAO);
-    
-    glGenBuffers(1, &lineVBO);
-    glBindBuffer(GL_ARRAY_BUFFER, lineVBO);
-    glBufferData(GL_ARRAY_BUFFER, lineVertices.size() * sizeof(float), lineVertices.data(), GL_STATIC_DRAW);
-    
-    // Set up vertex attributes
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)0);
-    
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)(3 * sizeof(float)));
-    
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)(6 * sizeof(float)));
-    
-    glGenBuffers(1, &lineIBO);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, lineIBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, lineIndices.size() * sizeof(unsigned int), lineIndices.data(), GL_STATIC_DRAW);
-    
-    // Unbind VAO
-    glBindVertexArray(0);
+    drawLine2DBresenham(x1, y1, x2, y2, lineVertices, lineIndices, lineVAO, lineVBO, lineIBO);
 }
-// Function to render the line
-void renderLine() {
-    if (!showLine || lineVertices.empty() || lineIndices.empty()) return;
-    
-    if (lineVAO == 0 || lineVBO == 0 || lineIBO == 0) {
-        return;
-    }
-
-    glUseProgram(ShaderProgram);
-    
-    // Set up transformation matrices
-    Matrix4f World;
-    // Initialize identity matrix
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j++) {
-            World.m[i][j] = (i == j) ? 1.0f : 0.0f;
-        }
-    }
-    
-    Matrix4f View;
-    createViewMatrix(View);
-    
-    Matrix4f Projection;
-    createProjectionMatrix(Projection);
-    
-    // Apply transformations
-    glUniformMatrix4fv(gWorldLocation, 1, GL_TRUE, &World.m[0][0]);
-    glUniformMatrix4fv(gViewLocation, 1, GL_TRUE, &View.m[0][0]);
-    glUniformMatrix4fv(gProjectionLocation, 1, GL_TRUE, &Projection.m[0][0]);
-
-    GLint prevVAO;
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVAO);
-    
-    glBindVertexArray(lineVAO);
-    
-    glLineWidth(4.0f);
-    
-    glDrawArrays(GL_LINE_STRIP, 0, lineVertices.size() / 9);
-    
-    glBindVertexArray(prevVAO);
-    glLineWidth(1.0f);
-    
-    GLenum err;
-    while ((err = glGetError()) != GL_NO_ERROR) {
-        fprintf(stderr, "OpenGL error during line rendering: %d\n", err);
-    }
-}
-
 
 void prepareMeshData() {
 meshVertices.clear();
@@ -1250,224 +1053,6 @@ glBufferData(GL_ELEMENT_ARRAY_BUFFER, meshIndices.size() * sizeof(unsigned int),
 
 glBindVertexArray(0);
 }
-
-void initializeEdgeTable() {
-    edgeTable.clear();
-    activeEdgeTable.clear();
-    
-    if (customVertices.empty() || customVertices.size() < 3) return;
-    
-    // Find min and max y coordinates
-    scanlineMinY = INT_MAX;
-    scanlineMaxY = INT_MIN;
-    
-    for (const auto& v : customVertices) {
-        int y = static_cast<int>(v.y * 1000); // Scale for precision
-        scanlineMinY = std::min(scanlineMinY, y);
-        scanlineMaxY = std::max(scanlineMaxY, y);
-    }
-    
-    if (scanlineMinY == INT_MAX || scanlineMaxY == INT_MIN) return;
-    
-    // Initialize edge table with empty vectors
-    edgeTable.resize(scanlineMaxY - scanlineMinY + 1);
-    
-    // Process each edge of the polygon
-    for (size_t i = 0; i < customVertices.size(); i++) {
-        size_t j = (i + 1) % customVertices.size(); // Next vertex
-        size_t k = (i + customVertices.size() - 1) % customVertices.size(); // Previous vertex
-        
-        // Get vertex y-coordinates
-        float yi = customVertices[i].y;
-        float yj = customVertices[j].y;
-        float yk = customVertices[k].y;
-        
-        // Skip if both adjacent edges are horizontal
-        if (yi == yj && yi == yk) continue;
-        
-        // Handle non-horizontal edges
-        if (yi != yj) {
-            Edge e;
-            // Determine yMin and yMax
-            if (yi < yj) {
-                e.yMin = static_cast<int>(yi * 1000);
-                e.yMax = static_cast<int>(yj * 1000);
-                e.xMin = customVertices[i].x;
-                e.slope = (customVertices[j].x - customVertices[i].x) / (yj - yi);
-            } else {
-                e.yMin = static_cast<int>(yj * 1000);
-                e.yMax = static_cast<int>(yi * 1000);
-                e.xMin = customVertices[j].x;
-                e.slope = (customVertices[i].x - customVertices[j].x) / (yi - yj);
-            }
-            
-            // Set color
-            e.color = glm::vec3(1.0f, 0.0f, 0.0f); // Default to red
-            
-            // Add edge to edge table
-            int yIndex = e.yMin - scanlineMinY;
-            if (yIndex >= 0 && yIndex < edgeTable.size()) {
-                edgeTable[yIndex].push_back(e);
-            }
-        }
-        
-        // Handle vertex intersection cases
-        bool isLocalMin = (yi < yj && yi < yk);
-        bool isLocalMax = (yi > yj && yi > yk);
-        bool isHorizontalIntersection = (yi == yj || yi == yk) && !(yi == yj && yi == yk);
-        
-        if (isLocalMin || isLocalMax || isHorizontalIntersection) {
-            Edge vertexEdge;
-            vertexEdge.yMin = static_cast<int>(yi * 1000);
-            vertexEdge.yMax = vertexEdge.yMin;
-            vertexEdge.xMin = customVertices[i].x;
-            vertexEdge.color = glm::vec3(1.0f, 0.0f, 0.0f);
-            
-            if (isLocalMin) {
-                // For local minimum (like point B), count as single intersection
-                vertexEdge.slope = 0.0f;
-            } else if (isLocalMax) {
-                // For local maximum (like point E), count as single intersection
-                vertexEdge.slope = 0.0f;
-            } else if (isHorizontalIntersection) {
-                // For horizontal intersection (like point D), count as double intersection
-                vertexEdge.slope = 1.0f;
-            }
-            
-            int yIndex = vertexEdge.yMin - scanlineMinY;
-            if (yIndex >= 0 && yIndex < edgeTable.size()) {
-                edgeTable[yIndex].push_back(vertexEdge);
-            }
-        }
-    }
-}
-
-void scanlineFill() {
-    if (edgeTable.empty()) return;
-    
-    std::vector<float> fillVertices;
-    std::vector<float> fillNormals;
-    std::vector<float> fillColors;
-    std::vector<unsigned int> fillIndices;
-    
-    unsigned int baseIndex = meshVertices.size() / 3;
-    activeEdgeTable.clear();
-    
-    // Process each scanline
-    for (int y = scanlineMinY; y <= scanlineMaxY; y++) {
-        float currentY = y / 1000.0f; // Convert back to original scale
-        int yIndex = y - scanlineMinY;
-        
-        // Remove finished edges
-        activeEdgeTable.erase(
-            std::remove_if(activeEdgeTable.begin(), activeEdgeTable.end(),
-                [y](const ActiveEdge& ae) { return ae.yMax <= y; }),
-            activeEdgeTable.end()
-        );
-        
-        // Add new edges to active edge table
-        if (yIndex >= 0 && yIndex < edgeTable.size()) {
-            for (const Edge& e : edgeTable[yIndex]) {
-                ActiveEdge ae;
-                ae.x = e.xMin;
-                ae.yMax = e.yMax;
-                ae.slope = e.slope;
-                ae.color = e.color;
-                
-                if (e.yMin == e.yMax) {
-                    // Special handling for vertex intersections
-                    if (e.slope == 1.0f) {
-                        // Double intersection (horizontal intersection point)
-                        activeEdgeTable.push_back(ae);
-                        activeEdgeTable.push_back(ae);
-                    } else {
-                        // Single intersection (local min/max)
-                        activeEdgeTable.push_back(ae);
-                    }
-                } else {
-                    // Regular edge
-                    activeEdgeTable.push_back(ae);
-                }
-            }
-        }
-        
-        // Sort active edges by x coordinate
-        std::sort(activeEdgeTable.begin(), activeEdgeTable.end(),
-            [](const ActiveEdge& a, const ActiveEdge& b) {
-                return a.x < b.x;
-            });
-        
-        // Fill between pairs of intersections
-        for (size_t i = 0; i + 1 < activeEdgeTable.size(); i += 2) {
-            float x1 = activeEdgeTable[i].x;
-            float x2 = activeEdgeTable[i+1].x;
-            
-            // Skip invalid segments
-            if (x2 <= x1) continue;
-            
-            // Create vertices for the scanline segment
-            // Bottom vertices
-            fillVertices.push_back(x1);
-            fillVertices.push_back(currentY);
-            fillVertices.push_back(0.0f);
-            
-            fillVertices.push_back(x2);
-            fillVertices.push_back(currentY);
-            fillVertices.push_back(0.0f);
-            
-            // Top vertices (slightly higher)
-            fillVertices.push_back(x2);
-            fillVertices.push_back(currentY + 0.001f);
-            fillVertices.push_back(0.0f);
-            
-            fillVertices.push_back(x1);
-            fillVertices.push_back(currentY + 0.001f);
-            fillVertices.push_back(0.0f);
-            
-            // Add colors (red fill)
-            for (int j = 0; j < 4; j++) {
-                fillColors.push_back(1.0f); // R
-                fillColors.push_back(0.0f); // G
-                fillColors.push_back(0.0f); // B
-            }
-            
-            // Add normals (facing forward)
-            for (int j = 0; j < 4; j++) {
-                fillNormals.push_back(0.0f);
-                fillNormals.push_back(0.0f);
-                fillNormals.push_back(1.0f);
-            }
-            
-            // Add indices for two triangles
-            unsigned int quadBaseIndex = (fillVertices.size() / 3) - 4;
-            fillIndices.push_back(baseIndex + quadBaseIndex);
-            fillIndices.push_back(baseIndex + quadBaseIndex + 1);
-            fillIndices.push_back(baseIndex + quadBaseIndex + 2);
-            
-            fillIndices.push_back(baseIndex + quadBaseIndex);
-            fillIndices.push_back(baseIndex + quadBaseIndex + 2);
-            fillIndices.push_back(baseIndex + quadBaseIndex + 3);
-        }
-        
-        // Update x coordinates for next scanline
-        for (ActiveEdge& ae : activeEdgeTable) {
-            if (ae.yMax > y) { // Only update if edge continues
-                ae.x += ae.slope * 0.001f; // Account for scaling
-            }
-        }
-    }
-    
-    // Add the fill data to the mesh
-    meshVertices.insert(meshVertices.end(), fillVertices.begin(), fillVertices.end());
-    meshNormals.insert(meshNormals.end(), fillNormals.begin(), fillNormals.end());
-    meshColors.insert(meshColors.end(), fillColors.begin(), fillColors.end());
-    meshIndices.insert(meshIndices.end(), fillIndices.begin(), fillIndices.end());
-    
-    // Update the mesh buffers
-    CreateMeshBuffers();
-}
-
-
 
 void computeFPS()
 {
@@ -1836,7 +1421,7 @@ void RenderImGui() {
             ImGui::PushID("sphere_radius");
             if (ImGui::DragFloat("Radius", &sphereRadius, 0.1f, 0.1f, 5.0f)) {
                 if (!spheres.empty()) {
-                    spheres[0].radius = sphereRadius;
+                                       spheres[0].radius = sphereRadius;
                 }
             }
             ImGui::PopID();
@@ -2051,11 +1636,6 @@ void RenderImGui() {
             if (ImGui::Button("Add Vertex")) {
                 customVertices.emplace_back(newX, newY, newZ);
             }
-            
-            if (ImGui::Button("Clear Vertices")) {
-                customVertices.clear();
-            }
-            
 
         if (ImGui::Button("Create Polygon")) {
             if (customVertices.size() >= 3) {
@@ -2082,8 +1662,8 @@ void RenderImGui() {
                     meshIndices.push_back(i);
                 }
                 
-                initializeEdgeTable();
-                scanlineFill();
+                initializeEdgeTable(customVertices, edgeTable, scanlineMinY, scanlineMaxY);
+                scanlineFill(edgeTable, activeEdgeTable, scanlineMinY, scanlineMaxY, meshVertices, meshNormals, meshColors, meshIndices, CreateMeshBuffers);
                 
                 CreateMeshBuffers();
             }
